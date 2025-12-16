@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genesis-engine"
+version = "0.1.0"
+description = "Raspberry Pi driver for GenesisEngine sound boards (YM2612 + SN76489)"
+readme = "README.md"
+license = {text = "LGPL-2.1-or-later"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Aaron Todd", email = "aarontodd82@gmail.com"}
+]
+keywords = ["sega", "genesis", "ym2612", "sn76489", "vgm", "chiptune", "raspberry-pi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "spidev>=3.5",
+    "RPi.GPIO>=0.7.0",
+]
+
+[project.optional-dependencies]
+pigpio = ["pigpio>=1.78"]
+dev = ["pytest>=7.0", "black", "mypy", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/aarontodd82/genesis-engine-pi"
+Repository = "https://github.com/aarontodd82/genesis-engine-pi"
+Documentation = "https://github.com/aarontodd82/genesis-engine-pi#readme"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["genesis_engine*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
