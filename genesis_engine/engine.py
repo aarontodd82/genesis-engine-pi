@@ -149,6 +149,10 @@ class GenesisEngine:
         if self._state != EngineState.PLAYING:
             return
 
+        # Source may have been closed by stop() in another thread
+        if not self._source or not self._source.is_open:
+            return
+
         # Calculate target samples based on elapsed time
         # VGM runs at 44100 Hz: samples = elapsed_ns * 44100 / 1_000_000_000
         # Simplified to avoid overflow: samples = elapsed_ns * 441 / 10_000_000
@@ -156,25 +160,34 @@ class GenesisEngine:
         target_samples = (elapsed_ns * 441) // 10_000_000
 
         # Process commands until caught up
-        while self._samples_played < target_samples:
-            # Consume waiting samples first
-            if self._waiting_samples > 0:
-                consume = min(self._waiting_samples, target_samples - self._samples_played)
-                self._waiting_samples -= consume
-                self._samples_played += consume
-                continue
-
-            # Check for end of track
-            if self._parser.is_finished:
-                if self._looping and self._parser.has_loop:
-                    self._parser.seek_to_loop()
-                else:
-                    self._state = EngineState.FINISHED
-                    self._board.reset()
+        # Wrapped in try/except to handle stop() closing source mid-operation
+        try:
+            while self._samples_played < target_samples:
+                # Check if we were stopped
+                if self._state != EngineState.PLAYING:
                     return
 
-            # Process next batch of commands
-            self._waiting_samples = self._parser.process_until_wait()
+                # Consume waiting samples first
+                if self._waiting_samples > 0:
+                    consume = min(self._waiting_samples, target_samples - self._samples_played)
+                    self._waiting_samples -= consume
+                    self._samples_played += consume
+                    continue
+
+                # Check for end of track
+                if self._parser.is_finished:
+                    if self._looping and self._parser.has_loop:
+                        self._parser.seek_to_loop()
+                    else:
+                        self._state = EngineState.FINISHED
+                        self._board.reset()
+                        return
+
+                # Process next batch of commands
+                self._waiting_samples = self._parser.process_until_wait()
+        except (ValueError, AttributeError, OSError):
+            # Source was closed by stop() - silently exit
+            return
 
     @property
     def state(self) -> EngineState:
