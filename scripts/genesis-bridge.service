@@ -1,0 +1,18 @@
+[Unit]
+Description=GenesisEngine Emulator Bridge
+Documentation=https://github.com/aarontodd82/GenesisEngine-Pi
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/GenesisEngine-Pi
+ExecStart=/usr/bin/python3 /home/pi/GenesisEngine-Pi/examples/emulator_bridge.py
+Restart=on-failure
+RestartSec=5
+
+# Give access to GPIO and SPI
+SupplementaryGroups=gpio spi
+
+[Install]
+WantedBy=multi-user.target
