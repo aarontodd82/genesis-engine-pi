@@ -187,22 +187,19 @@ class EmulatorBridge:
             "connected": False,
             "addr": addr,
             "next_cmd_time": 0.0,  # When next command should execute (perf_counter)
-            "buffer": bytearray(),  # Command buffer (like Arduino ring buffer)
         }
 
-    def _get_command_size(self, cmd: int) -> int:
-        """Get total command size including the command byte (like Arduino)."""
-        if CMD_WAIT_SHORT_BASE <= cmd <= 0x7F:
-            return 1
-        if cmd in (CMD_WAIT_60, CMD_WAIT_50, CMD_END_STREAM):
-            return 1
-        if cmd == CMD_PSG_WRITE:
-            return 2
-        if cmd in (CMD_WAIT, CMD_YM2612_PORT0, CMD_YM2612_PORT1):
-            return 3
-        if cmd == CMD_PING:
-            return 1
-        return 1  # Unknown command, skip 1 byte
+    def _wait_for_timing(self, client: dict) -> None:
+        """Wait until it's time to execute the next command."""
+        now = time.perf_counter()
+        wait_time = client["next_cmd_time"] - now
+        if wait_time > 0:
+            # Use sleep for waits > 1ms, busy-wait for precision on short waits
+            if wait_time > 0.001:
+                time.sleep(wait_time - 0.0005)  # Sleep most of it, busy-wait the rest
+            # Busy-wait for final precision
+            while time.perf_counter() < client["next_cmd_time"]:
+                pass
 
     def _add_wait_samples(self, client: dict, samples: int) -> None:
         """Add wait time in samples (at 44100 Hz) to the next command time."""
@@ -216,136 +213,80 @@ class EmulatorBridge:
         if client["next_cmd_time"] < now:
             client["next_cmd_time"] = now
 
-    def _process_one_command(self, conn: socket.socket, client: dict) -> int:
-        """
-        Process one command from buffer.
-        Returns: >0 = wait samples, 0 = chip write (continue), -1 = end/ping, -2 = need data
-        """
-        buf = client["buffer"]
-
-        if len(buf) == 0:
-            return -2  # Need more data
-
-        cmd = buf[0]
-        needed = self._get_command_size(cmd)
-        if len(buf) < needed:
-            return -2  # Need more data
-
-        # PING - handle immediately, return -1 to exit loop
-        if cmd == CMD_PING:
-            buf.pop(0)
-            print("Received PING, sending ACK")
-            self.board.reset()
-            conn.send(bytes([CMD_ACK, BOARD_TYPE_PI, FLOW_READY]))
-            client["connected"] = True
-            client["next_cmd_time"] = time.perf_counter()
-            client["buffer"] = bytearray()
-            return -1
-
-        # For all other commands, must be connected
-        if not client["connected"]:
-            buf.pop(0)
-            return 0  # Continue processing
-
-        # Wait commands - return sample count
-        if CMD_WAIT_SHORT_BASE <= cmd <= 0x7F:
-            buf.pop(0)
-            return (cmd & 0x0F) + 1
-
-        if cmd == CMD_WAIT_60:
-            buf.pop(0)
-            return 735
-
-        if cmd == CMD_WAIT_50:
-            buf.pop(0)
-            return 882
-
-        if cmd == CMD_WAIT:
-            samples = buf[1] | (buf[2] << 8)
-            del buf[0:3]
-            return samples
-
-        # Chip writes - return 0 to continue
-        if cmd == CMD_PSG_WRITE:
-            val = buf[1]
-            del buf[0:2]
-            self.board.write_psg(val)
-            return 0
-
-        if cmd == CMD_YM2612_PORT0:
-            reg, val = buf[1], buf[2]
-            del buf[0:3]
-            if reg == 0x2A:  # DAC data
-                self.board.write_dac(val)
-            else:
-                self.board.write_ym2612(0, reg, val)
-            return 0
-
-        if cmd == CMD_YM2612_PORT1:
-            reg, val = buf[1], buf[2]
-            del buf[0:3]
-            self.board.write_ym2612(1, reg, val)
-            return 0
-
-        if cmd == CMD_END_STREAM:
-            buf.pop(0)
-            print("Received END_STREAM, resetting")
-            self.board.reset()
-            client["next_cmd_time"] = time.perf_counter()
-            conn.send(bytes([FLOW_READY]))
-            return -1
-
-        # Unknown command, skip
-        buf.pop(0)
-        return 0
-
-    def _process_commands(self, conn: socket.socket, client: dict) -> None:
-        """Process buffered commands - matches Arduino's updatePlayback() exactly."""
-        while True:
-            # Check timing FIRST - if not time yet, exit immediately
-            now = time.perf_counter()
-            if now < client["next_cmd_time"]:
-                return  # Not time yet
-
-            # Process one command
-            result = self._process_one_command(conn, client)
-
-            if result == -2:
-                return  # Need more data
-
-            if result == -1:
-                return  # End of stream or ping handled
-
-            if result > 0:
-                # Wait command - schedule next command time
-                wait_seconds = result * SAMPLES_TO_SECONDS
-                client["next_cmd_time"] += wait_seconds
-
-                # If behind, snap to now (don't try to catch up)
-                if client["next_cmd_time"] < now:
-                    client["next_cmd_time"] = now
-
-                return  # Exit to let main loop receive more data
-
-            # result == 0: chip write, continue processing more commands
-
     def handle_client(self, conn: socket.socket) -> bool:
         """Handle data from a client. Returns False if client disconnected."""
         try:
-            # Read all available data into buffer (non-blocking)
-            conn.setblocking(False)
-            try:
-                data = conn.recv(4096)
-                if not data:
-                    return False
-                self.clients[conn]["buffer"].extend(data)
-            except BlockingIOError:
-                pass  # No data available right now
-            finally:
-                conn.setblocking(False)
+            data = conn.recv(1)
+            if not data:
+                return False
 
-            # Process commands from buffer
-            self._process_commands(conn, self.clients[conn])
+            cmd = data[0]
+            client = self.clients[conn]
+
+            # PING - connection handshake
+            if cmd == CMD_PING:
+                print("Received PING, sending ACK")
+                self.board.reset()
+                conn.send(bytes([CMD_ACK, BOARD_TYPE_PI, FLOW_READY]))
+                client["connected"] = True
+                client["next_cmd_time"] = time.perf_counter()  # Reset timing
+
+            # PSG write
+            elif cmd == CMD_PSG_WRITE:
+                val = self._recv_byte(conn)
+                if val is not None and client["connected"]:
+                    self._wait_for_timing(client)
+                    self.board.write_psg(val)
+
+            # YM2612 port 0
+            elif cmd == CMD_YM2612_PORT0:
+                data = self._recv_bytes(conn, 2)
+                if data and client["connected"]:
+                    self._wait_for_timing(client)
+                    reg, val = data[0], data[1]
+                    if reg == 0x2A:  # DAC data
+                        self.board.write_dac(val)
+                    else:
+                        self.board.write_ym2612(0, reg, val)
+
+            # YM2612 port 1
+            elif cmd == CMD_YM2612_PORT1:
+                data = self._recv_bytes(conn, 2)
+                if data and client["connected"]:
+                    self._wait_for_timing(client)
+                    reg, val = data[0], data[1]
+                    self.board.write_ym2612(1, reg, val)
+
+            # End stream
+            elif cmd == CMD_END_STREAM:
+                print("Received END_STREAM, resetting")
+                self.board.reset()
+                client["next_cmd_time"] = time.perf_counter()  # Reset timing
+                conn.send(bytes([FLOW_READY]))
+
+            # Wait N samples (16-bit little-endian)
+            elif cmd == CMD_WAIT:
+                data = self._recv_bytes(conn, 2)
+                if data and client["connected"]:
+                    samples = data[0] | (data[1] << 8)
+                    self._add_wait_samples(client, samples)
+
+            # Wait 735 samples (1/60 sec)
+            elif cmd == CMD_WAIT_60:
+                if client["connected"]:
+                    self._add_wait_samples(client, 735)
+
+            # Wait 882 samples (1/50 sec)
+            elif cmd == CMD_WAIT_50:
+                if client["connected"]:
+                    self._add_wait_samples(client, 882)
+
+            # Short wait 0x70-0x7F: wait 1-16 samples
+            elif CMD_WAIT_SHORT_BASE <= cmd <= 0x7F:
+                if client["connected"]:
+                    samples = (cmd & 0x0F) + 1
+                    self._add_wait_samples(client, samples)
+
             return True
 
         except (ConnectionResetError, BrokenPipeError, OSError):
@@ -469,9 +410,8 @@ class EmulatorBridge:
             print()
 
             while True:
-                # Short timeout - we need to process buffered commands frequently
-                # Like Arduino's loop() which runs continuously
-                events = self.selector.select(timeout=0.0001)  # 100µs
+                # Wait for events on any socket
+                events = self.selector.select(timeout=1.0)
 
                 for key, mask in events:
                     if key.data == "tcp_accept":
@@ -481,11 +421,6 @@ class EmulatorBridge:
                     elif key.data == "client":
                         if not self.handle_client(key.fileobj):
                             self.remove_client(key.fileobj)
-
-                # Process buffered commands for all clients (like Arduino's updatePlayback)
-                for conn, client in list(self.clients.items()):
-                    if client["connected"] and len(client["buffer"]) > 0:
-                        self._process_commands(conn, client)
 
         except KeyboardInterrupt:
             print("\nShutting down...")
