@@ -186,26 +186,21 @@ class EmulatorBridge:
         self.clients[conn] = {
             "connected": False,
             "addr": addr,
-            "next_cmd_time": 0.0,  # When next command should execute (perf_counter)
+            "start_time": 0.0,      # When playback started (perf_counter)
+            "elapsed_samples": 0,   # Total samples elapsed in the stream
         }
 
     def _wait_for_timing(self, client: dict) -> None:
-        """Wait until it's time to execute the next command."""
-        # Pure busy-wait for maximum accuracy (sleep has granularity issues on Linux)
-        while time.perf_counter() < client["next_cmd_time"]:
+        """Wait until it's time to execute the next command (absolute timing)."""
+        # Calculate where we SHOULD be on the global timeline
+        target_time = client["start_time"] + client["elapsed_samples"] * SAMPLES_TO_SECONDS
+        # Busy-wait until we reach that time
+        while time.perf_counter() < target_time:
             pass
 
     def _add_wait_samples(self, client: dict, samples: int) -> None:
-        """Add wait time in samples (at 44100 Hz) to the next command time."""
-        wait_seconds = samples * SAMPLES_TO_SECONDS
-
-        # Add wait first
-        client["next_cmd_time"] += wait_seconds
-
-        # If still behind schedule after adding, snap to now (don't try to catch up)
-        now = time.perf_counter()
-        if client["next_cmd_time"] < now:
-            client["next_cmd_time"] = now
+        """Add samples to elapsed count (absolute timing - no drift)."""
+        client["elapsed_samples"] += samples
 
     def handle_client(self, conn: socket.socket) -> bool:
         """Handle data from a client. Returns False if client disconnected."""
@@ -223,7 +218,8 @@ class EmulatorBridge:
                 self.board.reset()
                 conn.send(bytes([CMD_ACK, BOARD_TYPE_PI, FLOW_READY]))
                 client["connected"] = True
-                client["next_cmd_time"] = time.perf_counter()  # Reset timing
+                client["start_time"] = time.perf_counter()  # Global clock reference
+                client["elapsed_samples"] = 0
 
             # PSG write
             elif cmd == CMD_PSG_WRITE:
@@ -255,7 +251,8 @@ class EmulatorBridge:
             elif cmd == CMD_END_STREAM:
                 print("Received END_STREAM, resetting")
                 self.board.reset()
-                client["next_cmd_time"] = time.perf_counter()  # Reset timing
+                client["start_time"] = time.perf_counter()  # Reset global clock
+                client["elapsed_samples"] = 0
                 conn.send(bytes([FLOW_READY]))
 
             # Wait N samples (16-bit little-endian)
