@@ -204,13 +204,14 @@ class EmulatorBridge:
     def _add_wait_samples(self, client: dict, samples: int) -> None:
         """Add wait time in samples (at 44100 Hz) to the next command time."""
         wait_seconds = samples * SAMPLES_TO_SECONDS
-        now = time.perf_counter()
 
-        # If we're behind schedule, snap to now (don't try to catch up)
+        # Add wait first
+        client["next_cmd_time"] += wait_seconds
+
+        # If still behind schedule after adding, snap to now (don't try to catch up)
+        now = time.perf_counter()
         if client["next_cmd_time"] < now:
             client["next_cmd_time"] = now
-
-        client["next_cmd_time"] += wait_seconds
 
     def handle_client(self, conn: socket.socket) -> bool:
         """Handle data from a client. Returns False if client disconnected."""
