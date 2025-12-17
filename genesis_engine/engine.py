@@ -166,6 +166,7 @@ class GenesisEngine:
                 if self._looping and self._parser.has_loop:
                     self._parser.seek_to_loop()
                 else:
+                    self._board.mute_all()
                     self._state = EngineState.FINISHED
                     return
 

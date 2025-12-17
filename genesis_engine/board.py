@@ -240,9 +240,12 @@ class GenesisBoard:
         """
         Silence all sound from both chips.
 
-        Keys off all FM channels and silences PSG.
+        Keys off all FM channels, silences DAC, and silences PSG.
         """
         self._check_initialized()
+
+        # End DAC stream first so FM writes work correctly
+        self._in_dac_stream = False
 
         # Key off all FM channels
         for channel in range(6):
@@ -251,11 +254,12 @@ class GenesisBoard:
             ch_val = channel if channel < 3 else channel + 1
             self.write_ym2612(0, 0x28, ch_val)  # Key off (operator mask = 0)
 
+        # Silence DAC (0x80 = center/silent) and disable DAC output
+        self.write_ym2612(0, 0x2A, 0x80)
+        self.write_ym2612(0, 0x2B, 0x00)
+
         # Silence PSG
         self.silence_psg()
-
-        # End any DAC stream
-        self.end_dac_stream()
 
     def _pulse_wr_y(self) -> None:
         """Pulse YM2612 write strobe low then high."""
