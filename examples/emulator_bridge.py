@@ -30,6 +30,7 @@ import selectors
 import socket
 import sys
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +56,16 @@ CMD_YM2612_PORT1 = 0x53
 CMD_END_STREAM = 0x66
 FLOW_READY = 0x06
 BOARD_TYPE_PI = 6  # Raspberry Pi board type
+
+# VGM wait commands
+CMD_WAIT = 0x61         # Wait N samples (16-bit little-endian)
+CMD_WAIT_60 = 0x62      # Wait 735 samples (1/60 sec)
+CMD_WAIT_50 = 0x63      # Wait 882 samples (1/50 sec)
+CMD_WAIT_SHORT_BASE = 0x70  # 0x70-0x7F: wait 1-16 samples
+
+# Sample rate for timing (VGM standard)
+SAMPLE_RATE = 44100
+SAMPLES_TO_SECONDS = 1.0 / SAMPLE_RATE
 
 # Network defaults
 DEFAULT_TCP_PORT = 7654
@@ -172,7 +183,34 @@ class EmulatorBridge:
             print("Unix socket client connected")
 
         self.selector.register(conn, selectors.EVENT_READ, data="client")
-        self.clients[conn] = {"connected": False, "addr": addr}
+        self.clients[conn] = {
+            "connected": False,
+            "addr": addr,
+            "next_cmd_time": 0.0,  # When next command should execute (perf_counter)
+        }
+
+    def _wait_for_timing(self, client: dict) -> None:
+        """Wait until it's time to execute the next command."""
+        now = time.perf_counter()
+        wait_time = client["next_cmd_time"] - now
+        if wait_time > 0:
+            # Use sleep for waits > 1ms, busy-wait for precision on short waits
+            if wait_time > 0.001:
+                time.sleep(wait_time - 0.0005)  # Sleep most of it, busy-wait the rest
+            # Busy-wait for final precision
+            while time.perf_counter() < client["next_cmd_time"]:
+                pass
+
+    def _add_wait_samples(self, client: dict, samples: int) -> None:
+        """Add wait time in samples (at 44100 Hz) to the next command time."""
+        wait_seconds = samples * SAMPLES_TO_SECONDS
+        now = time.perf_counter()
+
+        # If we're behind schedule, snap to now (don't try to catch up)
+        if client["next_cmd_time"] < now:
+            client["next_cmd_time"] = now
+
+        client["next_cmd_time"] += wait_seconds
 
     def handle_client(self, conn: socket.socket) -> bool:
         """Handle data from a client. Returns False if client disconnected."""
@@ -190,17 +228,20 @@ class EmulatorBridge:
                 self.board.reset()
                 conn.send(bytes([CMD_ACK, BOARD_TYPE_PI, FLOW_READY]))
                 client["connected"] = True
+                client["next_cmd_time"] = time.perf_counter()  # Reset timing
 
             # PSG write
             elif cmd == CMD_PSG_WRITE:
                 val = self._recv_byte(conn)
                 if val is not None and client["connected"]:
+                    self._wait_for_timing(client)
                     self.board.write_psg(val)
 
             # YM2612 port 0
             elif cmd == CMD_YM2612_PORT0:
                 data = self._recv_bytes(conn, 2)
                 if data and client["connected"]:
+                    self._wait_for_timing(client)
                     reg, val = data[0], data[1]
                     if reg == 0x2A:  # DAC data
                         self.board.write_dac(val)
@@ -211,6 +252,7 @@ class EmulatorBridge:
             elif cmd == CMD_YM2612_PORT1:
                 data = self._recv_bytes(conn, 2)
                 if data and client["connected"]:
+                    self._wait_for_timing(client)
                     reg, val = data[0], data[1]
                     self.board.write_ym2612(1, reg, val)
 
@@ -218,15 +260,31 @@ class EmulatorBridge:
             elif cmd == CMD_END_STREAM:
                 print("Received END_STREAM, resetting")
                 self.board.reset()
+                client["next_cmd_time"] = time.perf_counter()  # Reset timing
                 conn.send(bytes([FLOW_READY]))
 
-            # Wait commands (from VGM streaming - ignore timing)
-            elif cmd == 0x61:  # Wait N samples
-                self._recv_bytes(conn, 2)
-            elif cmd == 0x62 or cmd == 0x63:  # Wait frame
-                pass
-            elif 0x70 <= cmd <= 0x7F:  # Short wait
-                pass
+            # Wait N samples (16-bit little-endian)
+            elif cmd == CMD_WAIT:
+                data = self._recv_bytes(conn, 2)
+                if data and client["connected"]:
+                    samples = data[0] | (data[1] << 8)
+                    self._add_wait_samples(client, samples)
+
+            # Wait 735 samples (1/60 sec)
+            elif cmd == CMD_WAIT_60:
+                if client["connected"]:
+                    self._add_wait_samples(client, 735)
+
+            # Wait 882 samples (1/50 sec)
+            elif cmd == CMD_WAIT_50:
+                if client["connected"]:
+                    self._add_wait_samples(client, 882)
+
+            # Short wait 0x70-0x7F: wait 1-16 samples
+            elif CMD_WAIT_SHORT_BASE <= cmd <= 0x7F:
+                if client["connected"]:
+                    samples = (cmd & 0x0F) + 1
+                    self._add_wait_samples(client, samples)
 
             return True
 
