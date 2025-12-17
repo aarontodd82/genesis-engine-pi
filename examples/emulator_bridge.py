@@ -234,24 +234,34 @@ class EmulatorBridge:
             return False
 
     def _recv_byte(self, conn: socket.socket) -> Optional[int]:
-        """Receive a single byte."""
+        """Receive a single byte (blocking until available)."""
         try:
+            # Temporarily block to ensure we get the byte
+            conn.setblocking(True)
             data = conn.recv(1)
+            conn.setblocking(False)
             return data[0] if data else None
-        except (BlockingIOError, OSError):
+        except OSError:
+            conn.setblocking(False)
             return None
 
     def _recv_bytes(self, conn: socket.socket, count: int) -> Optional[bytes]:
-        """Receive exactly count bytes."""
+        """Receive exactly count bytes (blocking until all received)."""
         try:
+            # Temporarily block to ensure we get all bytes
+            # This prevents dropped samples during high-rate DAC streaming
+            conn.setblocking(True)
             data = b""
             while len(data) < count:
                 chunk = conn.recv(count - len(data))
                 if not chunk:
+                    conn.setblocking(False)
                     return None
                 data += chunk
+            conn.setblocking(False)
             return data
-        except (BlockingIOError, OSError):
+        except OSError:
+            conn.setblocking(False)
             return None
 
     def remove_client(self, conn: socket.socket) -> None:
