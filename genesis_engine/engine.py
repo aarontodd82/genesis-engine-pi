@@ -147,9 +147,10 @@ class GenesisEngine:
             return
 
         # Calculate target samples based on elapsed time
-        # Formula from GenesisEngine.cpp:210-215
+        # VGM runs at 44100 Hz: samples = elapsed_ns * 44100 / 1_000_000_000
+        # Simplified to avoid overflow: samples = elapsed_ns * 441 / 10_000_000
         elapsed_ns = time.perf_counter_ns() - self._start_time_ns
-        target_samples = (elapsed_ns * 441) // 10_000_000_000
+        target_samples = (elapsed_ns * 441) // 10_000_000
 
         # Process commands until caught up
         while self._samples_played < target_samples:
