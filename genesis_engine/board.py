@@ -145,7 +145,10 @@ class GenesisBoard:
         """
         self._check_initialized()
 
-        # Set port select (A1) - GenesisBoard.cpp:125
+        # FM writes invalidate DAC stream setup (changes A0/A1 pins)
+        self._in_dac_stream = False
+
+        # Set port select (A1)
         GPIO.output(self._a1_y, GPIO.HIGH if port else GPIO.LOW)
 
         # Address phase - GenesisBoard.cpp:128-137
