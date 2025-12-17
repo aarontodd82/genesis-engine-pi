@@ -235,6 +235,7 @@ class GenesisBoard:
         # Channel attenuation commands: 0x9F, 0xBF, 0xDF, 0xFF
         for channel in range(4):
             self.write_psg(0x9F | (channel << 5))
+            time.sleep(0.0001)  # 100µs between PSG writes
 
     def mute_all(self) -> None:
         """
@@ -247,18 +248,21 @@ class GenesisBoard:
         # End DAC stream first so FM writes work correctly
         self._in_dac_stream = False
 
-        # Key off all FM channels
+        # Key off all FM channels (with delay between writes)
         for channel in range(6):
             # Channel mapping for key on/off register:
             # Channels 0-2 use values 0-2, channels 3-5 use values 4-6
             ch_val = channel if channel < 3 else channel + 1
             self.write_ym2612(0, 0x28, ch_val)  # Key off (operator mask = 0)
+            time.sleep(0.0001)  # 100µs between key-off writes
 
         # Silence DAC (0x80 = center/silent) and disable DAC output
         self.write_ym2612(0, 0x2A, 0x80)
+        time.sleep(0.0001)
         self.write_ym2612(0, 0x2B, 0x00)
+        time.sleep(0.0001)
 
-        # Silence PSG
+        # Silence PSG (silence_psg has its own timing)
         self.silence_psg()
 
     def _pulse_wr_y(self) -> None:
