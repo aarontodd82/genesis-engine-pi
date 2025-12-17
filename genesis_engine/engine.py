@@ -116,8 +116,11 @@ class GenesisEngine:
 
     def stop(self) -> None:
         """Stop playback and silence chips."""
-        self._board.mute_all()
+        # Set state first to stop update thread from processing more commands
         self._state = EngineState.STOPPED
+
+        # Hardware reset is more reliable than individual key-offs
+        self._board.reset()
 
         if self._source:
             self._source.close()
@@ -166,8 +169,8 @@ class GenesisEngine:
                 if self._looping and self._parser.has_loop:
                     self._parser.seek_to_loop()
                 else:
-                    self._board.mute_all()
                     self._state = EngineState.FINISHED
+                    self._board.reset()
                     return
 
             # Process next batch of commands
