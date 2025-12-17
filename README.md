@@ -80,12 +80,57 @@ Commands:
 - `t60` - Play middle C on PSG
 - `q` - Silence all
 
-### Emulator Bridge
+### Emulator Bridge (BlastEm → Real Hardware)
+
+Play games in BlastEm on your PC and hear audio from real YM2612/SN76489 chips on the Pi.
+
+#### Quick Setup
+
+1. **On the Pi**, start the bridge:
+   ```bash
+   pip3 install zeroconf  # For auto-discovery (first time only)
+   python3 examples/emulator_bridge.py
+   ```
+
+2. **On your PC**, run BlastEm with a ROM - it auto-connects to `raspberrypi.local:7654`
+
+That's it! Audio now plays through real hardware.
+
+#### Auto-Start on Boot
+
+To have the bridge start automatically when the Pi boots:
 
 ```bash
-python examples/emulator_bridge.py
-# Then connect BlastEm to /tmp/genesis_bridge.sock
+cd ~/projects/genesis-engine-pi/scripts
+chmod +x install-service.sh
+sudo ./install-service.sh
 ```
+
+Then just turn on your Pi and launch BlastEm - no manual setup needed.
+
+Service commands:
+```bash
+sudo systemctl start genesis-bridge    # Start now
+sudo systemctl stop genesis-bridge     # Stop
+sudo systemctl status genesis-bridge   # Check status
+journalctl -u genesis-bridge -f        # View logs
+```
+
+#### Manual Connection
+
+If auto-discovery doesn't work, you can specify the Pi's IP in BlastEm:
+- The bridge listens on TCP port 7654
+- Also available via Unix socket at `/tmp/genesis_bridge.sock` (local only)
+
+#### How It Works
+
+```
+[PC: BlastEm Emulator] --WiFi/Network--> [Pi: emulator_bridge.py] --> [GenesisEngine Board]
+                                                                            |
+                                                                      [Real YM2612 + SN76489]
+```
+
+BlastEm streams register writes over TCP. The Pi receives them and writes to the real chips in real-time.
 
 ## API Usage
 
