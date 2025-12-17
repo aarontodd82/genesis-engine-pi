@@ -194,7 +194,13 @@ class EmulatorBridge:
         """Wait until it's time to execute the next command (absolute timing)."""
         # Calculate where we SHOULD be on the global timeline
         target_time = client["start_time"] + client["elapsed_samples"] * SAMPLES_TO_SECONDS
-        # Busy-wait until we reach that time
+        now = time.perf_counter()
+
+        # If we're behind or within 50µs tolerance, execute immediately (reduces jitter)
+        if now >= target_time - 0.00005:
+            return
+
+        # Only busy-wait if we're significantly ahead
         while time.perf_counter() < target_time:
             pass
 
