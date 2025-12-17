@@ -191,15 +191,9 @@ class EmulatorBridge:
 
     def _wait_for_timing(self, client: dict) -> None:
         """Wait until it's time to execute the next command."""
-        now = time.perf_counter()
-        wait_time = client["next_cmd_time"] - now
-        if wait_time > 0:
-            # Use sleep for waits > 1ms, busy-wait for precision on short waits
-            if wait_time > 0.001:
-                time.sleep(wait_time - 0.0005)  # Sleep most of it, busy-wait the rest
-            # Busy-wait for final precision
-            while time.perf_counter() < client["next_cmd_time"]:
-                pass
+        # Pure busy-wait for maximum accuracy (sleep has granularity issues on Linux)
+        while time.perf_counter() < client["next_cmd_time"]:
+            pass
 
     def _add_wait_samples(self, client: dict, samples: int) -> None:
         """Add wait time in samples (at 44100 Hz) to the next command time."""
